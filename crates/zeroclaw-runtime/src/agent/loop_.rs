@@ -143,8 +143,8 @@ use zeroclaw_providers::{
 
 // Cost tracking moved to `super::cost`.
 pub use super::cost::{
-    TOOL_LOOP_COST_TRACKING_CONTEXT, ToolLoopCostTrackingContext, TurnUsage,
-    check_tool_loop_budget, record_tool_loop_cost_usage,
+    TOOL_LOOP_COST_TRACKING_CONTEXT, ToolLoopCostTrackingContext, check_tool_loop_budget,
+    record_tool_loop_cost_usage,
 };
 
 /// Minimum characters per chunk when relaying LLM text to a streaming draft.
@@ -1932,6 +1932,10 @@ pub async fn run_tool_call_loop(
                     .as_ref()
                     .map(|u| (u.input_tokens, u.output_tokens))
                     .unwrap_or((None, None));
+                let _ = resp
+                    .usage
+                    .as_ref()
+                    .and_then(|usage| record_tool_loop_cost_usage(provider_name, model, usage));
 
                 observer.record_event(&ObserverEvent::LlmResponse {
                     model_provider: provider_name.to_string(),
@@ -1942,12 +1946,6 @@ pub async fn run_tool_call_loop(
                     input_tokens: resp_input_tokens,
                     output_tokens: resp_output_tokens,
                 });
-
-                // Record cost via task-local tracker (no-op when not scoped)
-                let _ = resp
-                    .usage
-                    .as_ref()
-                    .and_then(|usage| record_tool_loop_cost_usage(provider_name, model, usage));
 
                 let mut response_text = if tool_specs.is_empty() {
                     strip_think_tags(resp.text_or_empty())
@@ -3796,15 +3794,7 @@ pub async fn run(
         let cost_tracking_context: Option<ToolLoopCostTrackingContext> =
             crate::cost::CostTracker::get_or_init_global(config.cost.clone(), &config.data_dir)
                 .map(|tracker| {
-                    let pricing: crate::agent::cost::ModelProviderPricing = config
-                        .providers
-                        .models
-                        .iter_entries()
-                        .map(|(type_k, alias_k, profile)| {
-                            (format!("{type_k}.{alias_k}"), profile.pricing.clone())
-                        })
-                        .filter(|(_, p)| !p.is_empty())
-                        .collect();
+                    let pricing = crate::agent::cost::build_model_provider_pricing(&config);
                     ToolLoopCostTrackingContext::new(tracker, Arc::new(pricing))
                         .with_agent_alias(agent_alias)
                 });
@@ -4677,6 +4667,7 @@ pub async fn process_message(
                 );
             }
         };
+        let provider_ref = format!("{provider_name}.{provider_alias}");
         let approval_manager = ApprovalManager::for_non_interactive(&risk_profile);
         let mem: Arc<dyn Memory> = zeroclaw_memory::create_memory_for_agent(
             &config,
@@ -5156,7 +5147,7 @@ pub async fn process_message(
                     &mut history,
                     &tools_registry,
                     observer.as_ref(),
-                    provider_name,
+                    &provider_ref,
                     &model_name,
                     effective_temperature,
                     true,

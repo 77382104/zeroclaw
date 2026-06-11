@@ -29,7 +29,7 @@ pub use zeroclaw_api::agent::TurnEvent;
 /// resolving the model from the override (when supplied) or the configured
 /// entry. Mirrors the model_provider-construction path in [`Agent::from_config`]
 /// so a live session switch produces the same wiring a fresh agent would.
-/// Returns the built box plus the resolved `(model_provider_name, model_name)`
+/// Returns the built box plus the resolved `(<type>.<alias>, model_name)`
 /// for attribution.
 pub fn build_session_model_provider(
     config: &Config,
@@ -84,7 +84,7 @@ pub fn build_session_model_provider(
         &model_provider_runtime_options,
     )?;
 
-    Ok((model_provider, model_provider_name, model_name))
+    Ok((model_provider, model_provider_ref.to_string(), model_name))
 }
 
 pub struct Agent {
@@ -1404,7 +1404,7 @@ impl Agent {
             .multimodal_config(config.multimodal.clone())
             .agent_alias(agent_alias.to_string())
             .model_name(model_name)
-            .model_provider_name(provider_name.to_string())
+            .model_provider_name(provider_ref.clone())
             .temperature(agent_model_provider.and_then(|e| e.temperature))
             .workspace_dir(security.workspace_dir.clone())
             .agent_workspace_dir(agent_workspace.clone())
@@ -2742,10 +2742,19 @@ impl Agent {
                 output_tokens: resp_output_tokens,
             });
 
+            let recorded_cost_usd = response.usage.as_ref().and_then(|usage| {
+                crate::agent::cost::record_tool_loop_cost_usage(
+                    &self.model_provider_name,
+                    &effective_model,
+                    usage,
+                )
+                .map(|(_, cost_usd)| cost_usd)
+            });
+
             // Forward per-call token usage so the WS gateway (and any other
-            // consumer) can include aggregated usage in the final done frame
-            // and write costs.jsonl. Absent when the provider does not surface
-            // usage in streaming responses.
+            // consumer) can include aggregated usage in the final done frame.
+            // Cost persistence flows through `record_tool_loop_cost_usage`
+            // above, so this event stays transport-only.
             if let Some(ref usage) = response.usage {
                 Self::send_turn_event(
                     &event_tx,
@@ -2754,7 +2763,7 @@ impl Agent {
                         input_tokens: usage.input_tokens,
                         cached_input_tokens: usage.cached_input_tokens,
                         output_tokens: usage.output_tokens,
-                        cost_usd: None,
+                        cost_usd: recorded_cost_usd,
                     },
                 )
                 .await;
