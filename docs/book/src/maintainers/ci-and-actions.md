@@ -200,7 +200,7 @@ All third-party refs are pinned to a full commit SHA with a trailing version com
 | `docker/login-action` (`v3.4.0`, `v4.1.0`) | `release-stable-manual.yml`, `docker-publish.yml`, `trivy-scheduled.yml` | GHCR authentication |
 | `docker/build-push-action` (`v6.18.0`, `v7.1.0`) | `release-stable-manual.yml`, `docker-publish.yml` | Multi-platform image build and push |
 | `sigstore/cosign-installer` (`v3.8.1`) | `release-stable-manual.yml`, `docker-publish.yml` | Install cosign for keyless GHCR container-image signing |
-| `anchore/sbom-action` (`v0.17.9`) | `release-stable-manual.yml` | Generate SPDX + CycloneDX SBOMs for each release |
+| `anchore/sbom-action` (`v0.24.0`) | `release-stable-manual.yml` | Generate SPDX + CycloneDX SBOMs for each release |
 | `aquasecurity/trivy-action` (`v0.36.0`) | `docker-image-pr.yml`, `docker-publish.yml`, `trivy-scheduled.yml` | Report-only container vulnerability scanning |
 | `github/codeql-action/upload-sarif` (`v3.36.2`) | `docker-publish.yml`, `trivy-scheduled.yml` | Upload Trivy SARIF reports to the Security tab |
 | `github/codeql-action/init` (`v3`) | `ci-code-analysis.yml` | Initialize CodeQL Rust analysis |
