@@ -33,6 +33,7 @@ zc-app-reload-status-signalled = デーモンの再読み込みを通知しま�
 zc-app-reload-confirm-row = { $confirm_chord } = 再読み込み   { $cancel_chord } = キャンセル
 zc-error-daemon-version-mismatch = バージョンが一致しません: zerocode は { $client_version } ですが、デーモンは { $server_version } です。同じチェックアウトからデーモンを再ビルドして再起動してください。
 zc-error-daemon-initialize-timeout = zerocode はデーモンに接続しましたが、{ $seconds } 秒以内に初期化が完了しませんでした。デーモンを再起動して、もう一度お試しください。
+zc-error-spawned-daemon-startup = zerocode は一時デーモンを起動しましたが、準備が完了しませんでした: { $details }
 zc-zerocode-tab-theme = テーマ
 zc-zerocode-tab-agent-theme = エージェントテーマ
 zc-zerocode-tab-presets = プリセット
