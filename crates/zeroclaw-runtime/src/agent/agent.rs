@@ -8115,6 +8115,7 @@ mod tests {
                 .collect(),
             prompts: vec![],
             slash_options: Vec::new(),
+            always: false,
             location: None,
         }
     }
@@ -8243,6 +8244,7 @@ mod tests {
             }],
             prompts: vec![],
             slash_options: Vec::new(),
+            always: false,
             location: None,
         };
         tools::register_skill_tools_with_context(
