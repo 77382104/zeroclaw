@@ -193,7 +193,7 @@ All third-party refs are pinned to a full commit SHA with a trailing version com
 |---|---|---|
 | `actions/checkout` (`v6.0.2`) | Most workflows | Repository checkout |
 | `actions/cache` (`v4.2.3`, `v5.0.5`) | `docker-image-pr.yml`, `tweet-release.yml` | Generic dependency and Trivy database caching |
-| `actions/setup-node` (`v6.4.0`) | `release-stable-manual.yml`, `cross-platform-build-manual.yml` | Node toolchain for the web-dashboard build |
+| `actions/setup-node` (`v7.0.0`) | `ci-sbom.yml`, `ci.yml`, `cross-platform-build-manual.yml`, `daily-npm-audit.yml`, `release-stable-manual.yml` | Node toolchain for npm SBOM generation, web tests/audit, and web/desktop builds |
 | `actions/upload-artifact` (`v7.0.1`) | `release-stable-manual.yml`, `cross-platform-build-manual.yml`, `docker-publish.yml`, `trivy-scheduled.yml` | Upload build artifacts and Trivy SARIF handoff artifacts |
 | `actions/download-artifact` (`v8.0.1`) | `release-stable-manual.yml`, `cross-platform-build-manual.yml`, `docker-publish.yml` | Download build artifacts and Trivy SARIF handoff artifacts |
 | `actions/attest` (`v4.2.1`) | `release-stable-manual.yml` | Generate GitHub-hosted Build Level 2 provenance for release assets |
