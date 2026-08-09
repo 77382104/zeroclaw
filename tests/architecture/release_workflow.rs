@@ -16,6 +16,24 @@ fn workflow(name: &str) -> String {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", workflow_path.display()))
 }
 
+fn assert_command_failure(
+    output: &std::process::Output,
+    expected_code: i32,
+    expected_stderr: &str,
+    context: &str,
+) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(expected_code),
+        "{context}: {stderr}"
+    );
+    assert!(
+        stderr.contains(expected_stderr),
+        "{context} must report {expected_stderr:?}, got: {stderr}"
+    );
+}
+
 fn yaml_block<'a>(document: &'a str, header: &str) -> &'a str {
     let header_indent = header.len() - header.trim_start().len();
     let start = document
@@ -148,9 +166,394 @@ fn package_publishers_use_canonical_sources_and_scoped_credentials() {
     );
 
     let aur = workflow("pub-aur.yml");
+    let publish_job = aur
+        .split_once("  publish-aur:\n")
+        .map(|(_, job)| job)
+        .expect("AUR publisher must define the publish-aur job");
+    assert!(
+        publish_job
+            .lines()
+            .take(5)
+            .any(|line| line == "    timeout-minutes: 20"),
+        "the publish-aur job must have a bounded job timeout"
+    );
     assert!(
         !aur.contains("ssh -T -o"),
         "AUR clone/push is the authoritative authentication check"
+    );
+    for required in [
+        "group: aur-publish-${{ github.repository }}-${{ inputs.dry_run }}",
+        "ref: refs/tags/${{ inputs.release_tag }}\n          path: release-source",
+        "release-source/dist/aur/PKGBUILD",
+        "release-source/dist/aur/.SRCINFO",
+        "if: inputs.dry_run == false\n        timeout-minutes: 12",
+        "\"${guard_command[@]}\" || return $?",
+        "case \"$attempt_status\" in",
+        "unexpected status ${attempt_status}",
+        "Generated PKGBUILD is not valid Bash syntax",
+        "tarball_url=\"https://github.com/zeroclaw-labs/zeroclaw/archive/refs/tags/${RELEASE_TAG}.tar.gz\"",
+        "require_exact_line \"$PKGBUILD_FILE\" \"$expected_pkgbuild_source\"",
+        "require_exact_line \"$SRCINFO_FILE\" \"$expected_srcinfo_source\"",
+        "package metadata is missing, malformed, or inconsistent",
+        "stopped to prevent a downgrade",
+        "package files changed without a version-tuple change",
+        "Release metadata is pinned to the immutable tag",
+        "corrected source change must ship under a new release tag",
+    ] {
+        assert!(
+            aur.contains(required),
+            "AUR publisher is missing release-safety invariant: {required}"
+        );
+    }
+
+    let workflow_call_inputs = aur
+        .split_once("  workflow_call:\n")
+        .and_then(|(_, remainder)| remainder.split_once("  workflow_dispatch:\n"))
+        .map(|(block, _)| block)
+        .expect("AUR publisher must define workflow_call before workflow_dispatch");
+    assert!(
+        !workflow_call_inputs.contains("allow_downgrade"),
+        "automated reusable callers must not be able to authorize an AUR downgrade"
+    );
+    let manual_inputs = aur
+        .split_once("  workflow_dispatch:\n")
+        .and_then(|(_, remainder)| remainder.split_once("\nconcurrency:\n"))
+        .map(|(block, _)| block)
+        .expect("AUR publisher must define manual dispatch inputs");
+    assert!(
+        manual_inputs.contains("allow_downgrade:"),
+        "manual recovery must expose an explicit downgrade override"
+    );
+    let downgrade_input = manual_inputs
+        .split_once("allow_downgrade:")
+        .map(|(_, block)| block)
+        .expect("manual dispatch must expose allow_downgrade");
+    assert!(
+        downgrade_input.contains("default: false"),
+        "manual downgrade authorization must default to false"
+    );
+
+    let guard_call = "scripts/release/aur_version_guard.sh";
+    assert_eq!(
+        aur.matches("scripts/release/aur_version_guard.sh").count(),
+        2,
+        "the AUR guard must validate generated metadata and each fresh clone"
+    );
+
+    let clone_position = aur
+        .find("git clone --quiet ssh://aur@aur.archlinux.org/zeroclawlabs.git")
+        .expect("AUR publisher must clone the authoritative package state");
+    let guard_position = aur
+        .rfind(guard_call)
+        .expect("AUR publisher must enforce monotonic versions");
+    let overwrite_position = aur
+        .find("cp \"$PKGBUILD_FILE\" \"$work_dir/PKGBUILD\"")
+        .expect("AUR publisher must update PKGBUILD");
+    assert!(
+        clone_position < guard_position && guard_position < overwrite_position,
+        "the AUR monotonic guard must inspect each fresh clone before package metadata is overwritten"
+    );
+
+    let input_validation_position = aur
+        .find("      - name: Validate release tag input\n")
+        .expect("release tag input must be validated");
+    let release_checkout_position = aur
+        .find("      - name: Check out release package metadata\n")
+        .expect("release package metadata must use an isolated checkout");
+    assert!(
+        input_validation_position < release_checkout_position,
+        "release_tag must be validated before it is used as a checkout ref"
+    );
+
+    let generated_validation = aur
+        .split_once("      - name: Validate generated AUR metadata\n")
+        .and_then(|(_, remainder)| remainder.split_once("      - name: Push to AUR\n"))
+        .map(|(step, _)| step)
+        .expect("generated AUR metadata must be validated before the push step");
+    assert!(
+        generated_validation.contains(guard_call)
+            && generated_validation.contains("\"$SRCINFO_FILE\" \"$SRCINFO_FILE\"")
+            && generated_validation.contains("\"$PKGBUILD_FILE\" \"$PKGBUILD_FILE\""),
+        "dry-run must exercise target-side metadata validation without an AUR clone"
+    );
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source_srcinfo = root.join("dist/aur/.SRCINFO");
+    let source_pkgbuild = root.join("dist/aur/PKGBUILD");
+    let source_guard = Command::new("bash")
+        .arg(root.join("scripts/release/aur_version_guard.sh"))
+        .arg(&source_srcinfo)
+        .arg(&source_srcinfo)
+        .arg(&source_pkgbuild)
+        .arg(&source_pkgbuild)
+        .output()
+        .expect("validate checked-in AUR package metadata");
+    assert!(
+        source_guard.status.success(),
+        "checked-in PKGBUILD and .SRCINFO version tuples must agree: {}",
+        String::from_utf8_lossy(&source_guard.stderr)
+    );
+
+    let freshness = workflow("aur-freshness-check.yml");
+    assert!(
+        freshness.contains(
+            "aur_epoch_pkgver=\"${aur_full%%-*}\"\n          aur_version=\"${aur_epoch_pkgver#*:}\""
+        ),
+        "AUR freshness must remove pkgrel and epoch before comparing pkgver to the release"
+    );
+    assert!(
+        freshness.contains("sort -V | tail -n 1")
+            && freshness.contains("AUR is newer than the release")
+            && freshness.contains("source_epoch=\"$(git show")
+            && freshness.contains("git show \"${tag}:dist/aur/.SRCINFO\"")
+            && freshness.contains("\"$aur_epoch\" != \"$source_epoch\"")
+            && freshness.contains("Do not use allow_downgrade across epochs")
+            && freshness.contains("cut a new release tag")
+            && freshness.contains("this check remains red until that tag is published"),
+        "freshness must compare the published epoch and scope downgrade recovery advice"
+    );
+}
+
+#[test]
+fn aur_publisher_rejects_stale_release_downgrades() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let guard_script = root.join("scripts/release/aur_version_guard.sh");
+    let temp = tempfile::tempdir().expect("create temporary AUR package directory");
+    let target_srcinfo = temp.path().join("target.SRCINFO");
+    let current_srcinfo = temp.path().join("current.SRCINFO");
+    let target_pkgbuild = temp.path().join("target.PKGBUILD");
+    let current_pkgbuild = temp.path().join("current.PKGBUILD");
+
+    let srcinfo = |epoch: Option<u32>, version: &str, release: &str| {
+        let epoch = epoch.map_or_else(String::new, |value| format!("epoch = {value}\n"));
+        format!(
+            "pkgbase = zeroclawlabs\n{epoch}pkgver = {version}\npkgrel = {release}\npkgname = zeroclawlabs\n"
+        )
+    };
+    let pkgbuild = |epoch: Option<u32>, version: &str, release: &str| {
+        let epoch = epoch.map_or_else(String::new, |value| format!("epoch={value}\n"));
+        format!("pkgname=zeroclawlabs\n{epoch}pkgver={version}\npkgrel={release}\n")
+    };
+
+    let run_guard = |target_metadata: &str,
+                     current_metadata: &str,
+                     target_build: &str,
+                     current_build: &str,
+                     allow_downgrade: bool| {
+        fs::write(&target_srcinfo, target_metadata).expect("write target AUR .SRCINFO");
+        fs::write(&current_srcinfo, current_metadata).expect("write current AUR .SRCINFO");
+        fs::write(&target_pkgbuild, target_build).expect("write target AUR PKGBUILD");
+        fs::write(&current_pkgbuild, current_build).expect("write current AUR PKGBUILD");
+        let mut command = Command::new("bash");
+        command.arg(&guard_script);
+        if allow_downgrade {
+            command.arg("--allow-downgrade");
+        }
+        command
+            .arg(&target_srcinfo)
+            .arg(&current_srcinfo)
+            .arg(&target_pkgbuild)
+            .arg(&current_pkgbuild)
+            .output()
+            .expect("run AUR monotonic package guard")
+    };
+
+    let same_build = pkgbuild(None, "1.2.3", "1");
+    let equal = srcinfo(None, "1.2.3", "1");
+    let output = run_guard(&equal, &equal, &same_build, &same_build, false);
+    assert!(
+        output.status.success(),
+        "an unchanged package must be idempotent: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for (target, current) in [("1.2.4", "1.2.3"), ("1.10.0", "1.9.9")] {
+        let output = run_guard(
+            &srcinfo(None, target, "1"),
+            &srcinfo(None, current, "1"),
+            &pkgbuild(None, target, "1"),
+            &pkgbuild(None, current, "1"),
+            false,
+        );
+        assert!(
+            output.status.success(),
+            "target {target} should be allowed over {current}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let older = srcinfo(None, "1.9.9", "1");
+    let newer = srcinfo(None, "1.10.0", "1");
+    let older_build = pkgbuild(None, "1.9.9", "1");
+    let newer_build = pkgbuild(None, "1.10.0", "1");
+    let output = run_guard(&older, &newer, &older_build, &newer_build, false);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "an older workflow must return the dedicated downgrade status"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Refusing AUR downgrade"),
+        "downgrade rejection must explain why publishing stopped"
+    );
+
+    let output = run_guard(&older, &newer, &older_build, &newer_build, true);
+    assert!(
+        output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("Manual AUR downgrade override"),
+        "an explicit manual override must permit a deliberate rollback"
+    );
+
+    let output = run_guard(
+        &srcinfo(None, "1.2.3", "1"),
+        &srcinfo(None, "1.2.3", "2"),
+        &pkgbuild(None, "1.2.3", "1"),
+        &pkgbuild(None, "1.2.3", "2"),
+        false,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "pkgrel must participate in monotonic package ordering"
+    );
+
+    let output = run_guard(
+        &srcinfo(None, "2.0.0", "1"),
+        &srcinfo(Some(1), "1.0.0", "1"),
+        &pkgbuild(None, "2.0.0", "1"),
+        &pkgbuild(Some(1), "1.0.0", "1"),
+        false,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "epoch must take precedence over pkgver"
+    );
+
+    let output = run_guard(
+        &srcinfo(None, "2.0.0", "1"),
+        &srcinfo(Some(1), "1.0.0", "1"),
+        &pkgbuild(None, "2.0.0", "1"),
+        &pkgbuild(Some(1), "1.0.0", "1"),
+        true,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "manual downgrade authorization must not cross an epoch boundary"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Refusing manual AUR downgrade override across an epoch boundary"),
+        "cross-epoch rejection must give actionable recovery guidance"
+    );
+
+    let changed_build = format!("{same_build}# changed metadata\n");
+    let output = run_guard(&equal, &equal, &changed_build, &same_build, false);
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "different package files must not reuse an existing version tuple"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(
+            "a changed package must ship under a new version tuple from a new release tag"
+        ),
+        "same-version drift guidance must account for immutable release metadata"
+    );
+
+    let output = run_guard(&equal, &equal, &changed_build, &same_build, true);
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "manual downgrade authorization must not permit same-version rewrites"
+    );
+
+    let malformed = srcinfo(None, "not-a-version", "1");
+    let output = run_guard(&equal, &malformed, &same_build, &same_build, false);
+    assert_command_failure(
+        &output,
+        2,
+        "Current AUR pkgver is not numeric",
+        "unparseable current AUR state must return a hard validation failure",
+    );
+    let output = run_guard(&equal, &malformed, &same_build, &same_build, true);
+    assert_command_failure(
+        &output,
+        2,
+        "Current AUR pkgver is not numeric",
+        "manual downgrade authorization must not permit malformed AUR state",
+    );
+
+    let extra_equals = equal.replace("pkgver = 1.2.3", "pkgver = 1.2.3 = junk");
+    let output = run_guard(&equal, &extra_equals, &same_build, &same_build, false);
+    assert_command_failure(
+        &output,
+        2,
+        "Current AUR pkgver is not numeric",
+        "SRCINFO values with trailing equals data must not be truncated",
+    );
+
+    let malformed_build = same_build.replace("pkgver=1.2.3", "pkgver=1.2.3=junk");
+    let output = run_guard(&equal, &equal, &same_build, &malformed_build, false);
+    assert_command_failure(
+        &output,
+        2,
+        "Current PKGBUILD pkgver is not numeric",
+        "PKGBUILD values with trailing equals data must not be truncated",
+    );
+
+    let duplicate = format!("{equal}pkgver = 9.9.9\n");
+    let output = run_guard(&equal, &duplicate, &same_build, &same_build, false);
+    assert_command_failure(
+        &output,
+        2,
+        "Expected exactly one pkgver in Current .SRCINFO; found 2",
+        "multiple pkgver fields must fail closed",
+    );
+
+    let mismatched_build = pkgbuild(None, "1.2.3", "2");
+    let output = run_guard(&equal, &equal, &mismatched_build, &same_build, false);
+    assert_command_failure(
+        &output,
+        2,
+        "Generated AUR .SRCINFO and PKGBUILD disagree",
+        "generated PKGBUILD and .SRCINFO version tuples must agree",
+    );
+
+    fs::write(&target_srcinfo, &equal).expect("restore target AUR .SRCINFO");
+    fs::write(&target_pkgbuild, &same_build).expect("restore target AUR PKGBUILD");
+    fs::remove_file(&current_srcinfo).expect("remove current AUR .SRCINFO");
+    fs::remove_file(&current_pkgbuild).expect("remove current AUR PKGBUILD");
+    let output = Command::new("bash")
+        .arg(&guard_script)
+        .arg(&target_srcinfo)
+        .arg(&current_srcinfo)
+        .arg(&target_pkgbuild)
+        .arg(&current_pkgbuild)
+        .output()
+        .expect("run AUR guard with missing current metadata");
+    assert_command_failure(
+        &output,
+        2,
+        "cloned AUR repository is unexpectedly empty",
+        "an empty clone must not implicitly authorize a first publish",
+    );
+
+    fs::write(&current_srcinfo, &equal).expect("restore only current AUR .SRCINFO");
+    let output = Command::new("bash")
+        .arg(&guard_script)
+        .arg(&target_srcinfo)
+        .arg(&current_srcinfo)
+        .arg(&target_pkgbuild)
+        .arg(&current_pkgbuild)
+        .output()
+        .expect("run AUR guard with partial current metadata");
+    assert_command_failure(
+        &output,
+        2,
+        "cloned AUR repository is partially populated",
+        "a partially populated cloned package must fail closed",
     );
 }
 

@@ -62,7 +62,7 @@ Bump `workspace.package.version` in the workspace `Cargo.toml`, then run the two
 This updates README badges, the Tauri config, and workflow description
 examples, then regenerates every spec-driven install surface via
 `cargo generate installers`: install.sh, setup.bat, `dist/aur/PKGBUILD`,
-`dist/scoop/zeroclaw.json`, `flake.nix`, the Dockerfile/Containerfile feature
+`dist/aur/.SRCINFO`, `dist/scoop/zeroclaw.json`, `flake.nix`, the Dockerfile/Containerfile feature
 sets, `dev/ci/docker-tags.toml`, `docs/book/src/_snippets/install.md`, the Unix
 fast-path blocks in README/platform docs, and the Windows prebuilt block in
 `docs/book/src/setup/windows.md`.
@@ -548,6 +548,53 @@ Same rotation path. Fix it before the next release.
 **Homebrew Core is stale:** Homebrew is not a release-workflow job. Check the
 [Homebrew autobump status and documented manual bump
 path](https://docs.brew.sh/Autobump) instead of adding a repository fork token.
+
+**The AUR job failed with `The AUR is down due to maintenance`:** An upstream
+outage, not a credential problem. `AUR_SSH_KEY` is fine if the log shows a key
+fingerprint under `SSH key diagnostics` and the failure came from the server
+rather than from SSH. The publisher retries five times over roughly seven
+minutes, with a hard job timeout. Each attempt reclones the current package and
+stops instead of downgrading it if another run has already published a newer
+version. Reaching the maintenance error means the window outlasted the retry
+budget. Wait for `aur.archlinux.org` to come back, then re-dispatch Pub AUR Package at the
+release tag with `dry_run: true`, then `dry_run: false`. Confirm the result with
+`curl -fsS 'https://aur.archlinux.org/rpc/v5/info?arg%5B%5D=zeroclawlabs'`, or
+just dispatch AUR Freshness Check. Skipping this leaves the AUR silently behind
+until the weekly check catches it.
+
+**The AUR is newer than a deliberately rolled-back stable release:** Verify the
+rollback tag and package contents. If the published package has a nonzero
+`epoch` that the rollback tag does not contain, do not re-dispatch the old tag:
+release metadata comes from the immutable tag, so default-branch edits cannot
+change that run. Instead, prepare a forward-numbered stable release containing
+the reverted code, add the matching `epoch=` assignment to
+`dist/aur/PKGBUILD`, run `cargo generate installers` to regenerate
+`dist/aur/.SRCINFO`, review both files, merge, and cut a new release tag. The
+freshness check remains red until that tag is published. Never use
+`allow_downgrade` to cross an epoch boundary. For a rollback within the same
+epoch, run the manual Pub AUR
+Package workflow once with `dry_run: true` to validate metadata generation and
+the target side of the version guard, then run it with `dry_run: false` and
+`allow_downgrade: true`. The non-dry-run guard additionally compares the fresh
+AUR clone. That override exists only on manual dispatch; the reusable interface
+does not declare the input and therefore cannot request it. Never use it to
+bypass malformed AUR metadata or an unexplained version mismatch.
+
+**Publishing stopped because package files differ at the same version:** The
+publisher intentionally refuses to replace different files at an existing
+`epoch:pkgver-pkgrel` tuple. Inspect the diff. An authorized AUR maintainer must
+either restore the canonical PKGBUILD and `.SRCINFO` generated from that release
+tag, or merge a corrected source change and ship it under a new stable release
+tag. Editing the default branch and re-dispatching the old tag cannot work,
+because the publisher reads metadata from the immutable tag.
+
+**Publishing reports a non-numeric or otherwise malformed current AUR
+version:** The automated publisher intentionally fails closed, and
+`allow_downgrade` cannot bypass malformed metadata. An authorized AUR maintainer
+must repair the package with a manual AUR push to a well-formed
+`epoch:pkgver-pkgrel`, verify it through the AUR RPC, and then re-dispatch the
+normal publisher. Do not weaken the guard to make malformed published state
+comparable.
 
 ---
 
