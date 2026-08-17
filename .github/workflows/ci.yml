@@ -131,44 +131,15 @@ jobs:
         run: bash scripts/ci/apt_install.sh libudev-dev ripgrep
       - name: Ensure web/dist placeholder exists
         run: mkdir -p web/dist && touch web/dist/.gitkeep
+      - name: Clippy runner contract tests
+        run: bash scripts/ci/run_clippy.test.sh
       - name: Clippy
         shell: bash
         run: |
-          set +e
-          cargo_log="${RUNNER_TEMP}/cargo-clippy.log"
-          SECONDS=0
-          cargo clippy \
-            --locked \
-            --workspace \
-            --exclude zeroclaw-desktop \
-            --all-targets \
-            --features ci-all \
-            -- -D warnings 2>&1 | tee "$cargo_log"
-          cargo_status=${PIPESTATUS[0]}
-          duration_seconds=$SECONDS
-          set -e
-
-          workspace_path_compiles="$(grep -E -c 'Compiling.*\([^)]*zeroclaw' "$cargo_log" || true)"
-          total_compiles="$(grep -c 'Compiling' "$cargo_log" || true)"
-          downloaded_crates="$(grep -c 'Downloaded' "$cargo_log" || true)"
-          cache_hit="${RUST_CACHE_HIT:-unknown}"
-          summary_file="${GITHUB_STEP_SUMMARY:-/dev/null}"
-
-          {
-            echo "### Lint diagnostics"
-            echo ""
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Runner OS | \`${{ runner.os }}\` |"
-            echo "| Rust cache exact hit | \`${cache_hit}\` |"
-            echo "| Clippy duration | \`${duration_seconds}s\` |"
-            echo "| Clippy status | \`${cargo_status}\` |"
-            echo "| Workspace path compile lines | \`${workspace_path_compiles}\` |"
-            echo "| Total compile lines | \`${total_compiles}\` |"
-            echo "| Downloaded crate lines | \`${downloaded_crates}\` |"
-          } >> "$summary_file"
-
-          exit "$cargo_status"
+          bash scripts/ci/run_clippy.sh \
+            --scope workspace \
+            --summary-title "Lint diagnostics" \
+            --log-name cargo-clippy.log
         env:
           RUST_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
       - name: Rustdoc warnings gate
@@ -219,7 +190,7 @@ jobs:
               ;;
           esac
 
-          if grep -Eq '^(crates/zeroclaw-tools/|\.github/workflows/(ci|cross-platform-clippy)\.yml$)' "$changed_files"; then
+          if grep -Eq '^(crates/zeroclaw-tools/|scripts/ci/run_clippy\.sh$|\.github/workflows/(ci|cross-platform-clippy)\.yml$)' "$changed_files"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -249,42 +220,11 @@ jobs:
       - name: Clippy
         shell: bash
         run: |
-          set +e
-          cargo_log="${RUNNER_TEMP}/cargo-clippy-windows-tools.log"
-          SECONDS=0
-          cargo clippy \
-            -p zeroclaw-tools \
-            --all-targets \
-            --all-features \
+          bash scripts/ci/run_clippy.sh \
+            --scope tools \
             --target x86_64-pc-windows-msvc \
-            --no-deps \
-            -- -D warnings 2>&1 | tee "$cargo_log"
-          cargo_status=${PIPESTATUS[0]}
-          duration_seconds=$SECONDS
-          set -e
-
-          workspace_path_compiles="$(grep -E -c 'Compiling.*\([^)]*zeroclaw' "$cargo_log" || true)"
-          total_compiles="$(grep -c 'Compiling' "$cargo_log" || true)"
-          downloaded_crates="$(grep -c 'Downloaded' "$cargo_log" || true)"
-          cache_hit="${RUST_CACHE_HIT:-unknown}"
-          summary_file="${GITHUB_STEP_SUMMARY:-/dev/null}"
-
-          {
-            echo "### Targeted Windows Clippy diagnostics"
-            echo ""
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Target | \`x86_64-pc-windows-msvc\` |"
-            echo "| Runner OS | \`${{ runner.os }}\` |"
-            echo "| Rust cache exact hit | \`${cache_hit}\` |"
-            echo "| Clippy duration | \`${duration_seconds}s\` |"
-            echo "| Clippy status | \`${cargo_status}\` |"
-            echo "| Workspace path compile lines | \`${workspace_path_compiles}\` |"
-            echo "| Total compile lines | \`${total_compiles}\` |"
-            echo "| Downloaded crate lines | \`${downloaded_crates}\` |"
-          } >> "$summary_file"
-
-          exit "$cargo_status"
+            --summary-title "Targeted Windows Clippy diagnostics" \
+            --log-name cargo-clippy-windows-tools.log
         env:
           RUST_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
 

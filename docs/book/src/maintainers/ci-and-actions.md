@@ -144,6 +144,8 @@ Manual trigger for building release binaries across the full target matrix: Linu
 
 Manual and weekly scheduled advisory lint coverage on macOS aarch64 and Windows x86_64 targets. It mirrors the required PR lint command with `--target` set for each platform, but intentionally does not run on PRs and is not part of `CI Required Gate`.
 
+Required Linux Clippy, advisory cross-platform Clippy, and targeted Windows Clippy call `scripts/ci/run_clippy.sh`. That runner owns the supported command shapes, Cargo exit-status propagation, and the shared duration, cache, compile-count, and download-count diagnostics. The workflow files continue to own triggers, runners, toolchains, caches, timeouts, and required-gate membership.
+
 ### Release Stable (`release-stable-manual.yml`)
 
 Manual trigger for the full release pipeline. Builds all targets, creates the GitHub Release, pushes the prebuilt `latest`, versioned, and `debian` Docker images to GHCR, calls the generated Docker variant matrix at the release tag, triggers the website redeploy, and invokes the distribution sub-workflows (Scoop, AUR, Discord, tweet). Homebrew Core detects new releases through its own autobump service. Two environment gates require maintainer approval mid-run: `github-releases` (the `publish` job) and `docker`.
