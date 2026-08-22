@@ -12,8 +12,9 @@ use crate::component::{
     PluginState, PluginStoreSpec, WarmPluginState, call_channel, call_store, engine,
     load_component, wt, wt_instantiate,
 };
-use crate::config::{PluginConfigResolver, ResolvedPluginConfig};
+use crate::config::ResolvedPluginConfig;
 use crate::endpoint::PluginChannelEndpoint;
+use crate::services::PluginHostServices;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::Path;
@@ -44,14 +45,18 @@ pub struct WasmChannel {
 
 struct ChannelInstanceFactory {
     component: Component,
+    /// Required host-service bundle used to build every (re)instantiated store's
+    /// state, so a rebuilt instance resolves canonical config under the same
+    /// scope as the original.
+    services: PluginHostServices,
     /// Generation-scoped `configure` snapshot. Resolved and validated once at
     /// construction under the scope's `ConfigRead` grant and replayed verbatim
     /// when an interrupted instance is reconstructed, so a rebuilt instance can
     /// never observe different config than the one whose cached metadata it
-    /// must match. When the grant is present this may hold channel secrets in
-    /// plaintext for exactly as long as the owning [`WasmChannel`] lives:
-    /// there is no live config handle to refresh, so a config reload must
-    /// rebuild the channel, which discards this snapshot with it.
+    /// must match. Only the non-secret (`public_json`) view is handed to the
+    /// guest; channels cannot declare `x-secret`, so this snapshot carries no
+    /// plaintext secrets. There is no live config handle to refresh, so a config
+    /// reload must rebuild the channel, which discards this snapshot with it.
     config: ResolvedPluginConfig,
     limits: crate::component::PluginLimits,
 }
@@ -107,18 +112,20 @@ impl WasmChannel {
     pub async fn from_wasm(
         endpoint: PluginChannelEndpoint,
         wasm_path: &Path,
-        config: &PluginConfigResolver,
+        services: &PluginHostServices,
         limits: crate::component::PluginLimits,
     ) -> Result<Self> {
         // Resolve and validate the operator config before any guest code is
         // loaded, so an invalid section rejects registration rather than
-        // reaching a running instance (master), and keep the resolved view as
-        // the generation-scoped snapshot the factory replays when it rebuilds
-        // an interrupted instance (this PR).
-        let config = config.resolve(endpoint.scope())?;
+        // reaching a running instance, and keep the resolved public view as the
+        // generation-scoped snapshot the factory replays when it rebuilds an
+        // interrupted instance. Channels cannot declare `x-secret`, so this
+        // snapshot carries no plaintext secrets.
+        let config = services.resolve_config(endpoint.scope())?;
         let inbound = InboundQueue::default();
         let factory = ChannelInstanceFactory {
             component: load_component(wasm_path)?,
+            services: services.clone(),
             config,
             limits,
         };
@@ -177,7 +184,7 @@ impl ChannelInstanceFactory {
         inbound: InboundQueue,
     ) -> Result<ChannelInstance> {
         let mut store = crate::component::new_store(
-            PluginStoreSpec::new(endpoint.scope().clone(), self.limits)
+            PluginStoreSpec::new(endpoint.scope().clone(), self.services.clone(), self.limits)
                 .with_granted_http()
                 .with_inbound(inbound),
         );
@@ -191,12 +198,13 @@ impl ChannelInstanceFactory {
             )
         })?;
 
-        // Hand the plugin its resolved config once, before any other call. The
-        // section is withheld unless the admitted scope grants `ConfigRead`, matching
-        // the tool-plugin `__config` rule, so a plugin without the permission is
-        // configured with an empty object rather than another channel's secrets.
+        // Hand the plugin its non-secret resolved config once, before any other
+        // call. The section is withheld unless the admitted scope grants
+        // `ConfigRead`, matching the tool-plugin `__config` rule, so a plugin
+        // without the permission is configured with an empty object rather than
+        // another channel's config.
         self.config.ensure_scope(store.data().scope())?;
-        let config_json = serde_json::to_string(self.config.as_json())?;
+        let config_json = serde_json::to_string(self.config.public_json())?;
         call_store!(store, async |store: &mut Store<PluginState>| {
             wt(
                 bindings
@@ -846,6 +854,7 @@ impl Channel for WasmChannel {
 mod tests {
     use super::*;
     use crate::PluginCapability;
+    use crate::config::PluginConfigResolver;
 
     #[test]
     fn media_round_trip() {
@@ -886,20 +895,22 @@ mod tests {
     async fn channel_validates_config_before_loading_guest_code() {
         let scope = crate::instance::test_scope(PluginCapability::Channel, "main", []);
         let endpoint = PluginChannelEndpoint::new(scope, "plugin").unwrap();
-        let config = PluginConfigResolver::new(|_| {
+        let services = PluginHostServices::new(PluginConfigResolver::new(|_| {
             Err(crate::error::PluginError::InvalidConfig(
                 "invalid-before-load".to_string(),
             ))
-        });
-        let error = WasmChannel::from_wasm(
+        }));
+        let result = WasmChannel::from_wasm(
             endpoint,
             Path::new("/path/that/must/not/exist.wasm"),
-            &config,
+            &services,
             crate::component::test_limits(0),
         )
-        .await
-        .err()
-        .expect("invalid config must reject registration");
+        .await;
+        let error = match result {
+            Ok(_) => panic!("invalid config must reject registration"),
+            Err(error) => error,
+        };
 
         assert!(error.to_string().contains("invalid-before-load"));
     }

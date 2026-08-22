@@ -12,10 +12,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use zeroclaw_plugins::component::PluginLimits;
-use zeroclaw_plugins::config::{ResolvedPluginConfig, resolve_plugin_config};
+use zeroclaw_plugins::config::{PluginConfigResolver, resolve_plugin_config};
 use zeroclaw_plugins::host::PluginHost;
 use zeroclaw_plugins::instance::PluginInstanceScope;
 use zeroclaw_plugins::runtime;
+use zeroclaw_plugins::services::PluginHostServices;
 use zeroclaw_plugins::{PluginCapability, PluginPermission};
 
 fn fixture() -> PathBuf {
@@ -62,13 +63,11 @@ fn limits(call_timeout: Duration, call_fuel: u64) -> PluginLimits {
     }
 }
 
-/// A warm fixture plugin paired with the resolved config view its scope
-/// admits. `call_execute` now takes the typed, scope-bound config rather than
-/// a raw string map, and the view must come from the *same* scope issuance the
-/// instance was created with, so the two are carried together.
+/// A warm fixture plugin. `call_execute` resolves the plugin's non-secret
+/// config through the host-service bundle injected at `create_plugin`, so the
+/// test carries only the warm plugin.
 struct Fixture {
     plugin: runtime::Plugin,
-    config: ResolvedPluginConfig,
 }
 
 async fn plugin(call_timeout: Duration) -> Fixture {
@@ -103,13 +102,18 @@ async fn plugin_with_fuel(call_timeout: Duration, call_fuel: u64) -> Fixture {
     )
     .expect("admit fixture scope");
     // The fixture manifest declares no `config_schema` and does not request
-    // `config_read`, so this resolves to the empty object the guest expects.
-    let config = resolve_plugin_config(manifest, &scope, None)
-        .expect("fixture manifest resolves an empty config section");
-    let plugin = runtime::create_plugin(path, &scope, limits(call_timeout, call_fuel))
+    // `config_read`, so the injected config service resolves to the empty object
+    // the guest expects.
+    let services = {
+        let manifest = manifest.clone();
+        PluginHostServices::new(PluginConfigResolver::new(move |scope| {
+            resolve_plugin_config(&manifest, scope, None)
+        }))
+    };
+    let plugin = runtime::create_plugin(path, &scope, &services, limits(call_timeout, call_fuel))
         .await
         .expect("instantiate timeout fixture");
-    Fixture { plugin, config }
+    Fixture { plugin }
 }
 
 /// Spawn a one-request server. The returned receiver resolves once the
@@ -178,7 +182,6 @@ async fn execute(
     runtime::call_execute(
         &mut fixture.plugin,
         &serde_json::to_vec(&value).expect("serialize fixture input"),
-        &fixture.config,
     )
     .await
 }
