@@ -440,7 +440,7 @@ Two operational constraints worth repeating from the
 | Tool rejected during registration | Config validation or the metadata probe failed. Check the log for the specific error; a probe failure usually means the component was built against mismatched WIT. |
 | Tool never selected by the model | Name collides with a built-in, or the description/schema do not tell the model when the tool applies. |
 | `__config` absent despite configured section | The effective scope denied `config_read`, the entry does not use the installation-printed full-instance key, or the validated object is empty. A `config_schema`/permission mismatch rejects the plugin instead. |
-| Call traps | Fuel or memory ceiling hit. Raise `plugins.limits.call_fuel` / `plugins.limits.max_memory_mb`, or do less per call. |
+| Call fails or traps | Fuel, wall-clock, or memory ceiling hit. Raise `plugins.limits.call_fuel`, `plugins.limits.call_timeout_ms`, or `plugins.limits.max_memory_mb` as appropriate, or do less per call. |
 | Load fails on a runtime-only host | You shipped `.wasm` to a host with no JIT; ship a version-matched `.cwasm` instead. |
 
 ## Next

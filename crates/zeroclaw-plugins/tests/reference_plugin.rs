@@ -67,6 +67,7 @@ fn test_limits() -> PluginLimits {
         max_memory_bytes: 256 * 1024 * 1024,
         max_table_elements: 100_000,
         max_instances: 64,
+        call_timeout: std::time::Duration::from_secs(30),
     }
 }
 
@@ -297,6 +298,7 @@ async fn reference_plugin_rejects_work_past_fuel_budget() {
         max_memory_bytes: 256 * 1024 * 1024,
         max_table_elements: 100_000,
         max_instances: 64,
+        call_timeout: std::time::Duration::from_secs(30),
     };
     let (manifest, scope) = context([]);
     match runtime::create_plugin(&fixture(), &scope, starved).await {
@@ -323,6 +325,7 @@ async fn reference_plugin_traps_when_memory_capped() {
         max_memory_bytes: 1,
         max_table_elements: 100_000,
         max_instances: 64,
+        call_timeout: std::time::Duration::from_secs(30),
     };
     let (_, scope) = context([]);
     let outcome = runtime::create_plugin(&fixture(), &scope, capped).await;
