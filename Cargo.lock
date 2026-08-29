@@ -14231,7 +14231,6 @@ name = "zerocode"
 version = "0.8.4"
 dependencies = [
  "anyhow",
- "async-trait",
  "chrono",
  "clap",
  "crossterm",
