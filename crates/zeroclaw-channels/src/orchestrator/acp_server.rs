@@ -52,8 +52,6 @@ impl Default for AcpServerConfig {
 
 struct Session {
     agent: Agent,
-    #[allow(dead_code)] // WIP: intended for session expiry logic
-    created_at: Instant,
     last_active: Instant,
     /// Agent alias (e.g. `"clamps"`) for attributable span logs.
     agent_alias: String,
@@ -910,7 +908,6 @@ impl AcpServer {
                 session_id.clone(),
                 Arc::new(Mutex::new(Session {
                     agent,
-                    created_at: now,
                     last_active: now,
                     agent_alias: agent_alias.clone(),
                     model_provider: config
@@ -1115,7 +1112,6 @@ impl AcpServer {
                 session_id.clone(),
                 Arc::new(Mutex::new(Session {
                     agent,
-                    created_at: now,
                     last_active: now,
                     agent_alias: restore_alias.clone(),
                     model_provider: config
@@ -1315,7 +1311,6 @@ impl AcpServer {
                 session_id.clone(),
                 Arc::new(Mutex::new(Session {
                     agent,
-                    created_at: now,
                     last_active: now,
                     agent_alias: restore_alias.clone(),
                     model_provider: config
